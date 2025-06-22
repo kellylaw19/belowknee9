@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Sock Pattern Generator (True Size PDF, A3, Pattern Only in PDF)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body { font-family: 'Noto Sans TC', Arial, sans-serif; background: #f9f9f9; margin: 0; padding: 2em;}
+    .input-area { background: #fff; padding: 1.5em; border-radius: 8px; box-shadow: 0 2px 8px #0001; margin-bottom: 1em;}
+    label { display: block; margin-bottom: 0.3em;}
+    input[type="number"] { width: 6em; margin-bottom: 1em;}
+    canvas { background: #fffbe7; border: 1px solid #bbb; display: block; margin: 1em 0; max-width: 100%;}
+    .note { color: #666; font-size: 0.95em;}
+    #printBtn, #pdfBtn { margin-bottom: 1em; padding: 0.5em 1em; font-size: 1.1em; }
+    @media print {
+      body { background: #fff; }
+      .input-area, #printBtn, #pdfBtn, .note { display: none !important; }
+      canvas { border: none; }
+    }
+    @media (max-width: 600px) {
+      body { padding: 0.5em; }
+      .input-area { padding: 0.8em; }
+    }
+  </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+</head>
+<body>
+  <h2>Sock Pattern Generator (no calibration ruler in PDF)</h2>
+  <form class="input-area" id="sockForm">
+    <label>Leg length below knee (cm)
+      <input type="number" step="0.1" id="leglen" value="35" required>
+    </label>
+    <label>Below knee circumference (cm)
+      <input type="number" step="0.1" id="bk_circ" value="34" required>
+    </label>
+    <label>Calf level height <b>(cm from top)</b>
+      <input type="number" step="0.1" id="calf_level" value="10" required>
+    </label>
+    <label>Calf circumference (cm)
+      <input type="number" step="0.1" id="calf_circ" value="39" required>
+    </label>
+    <label>Narrowest level height <b>(cm from top)</b>
+      <input type="number" step="0.1" id="narrowest_level" value="26" required>
+    </label>
+    <label>Narrowest circumference (cm)
+      <input type="number" step="0.1" id="narrowest_circ" value="23" required>
+    </label>
+    <label>Back malleolus level height <b>(cm from top)</b>
+      <input type="number" step="0.1" id="back_mal_level" value="31" required>
+    </label>
+    <label>Back malleolus arc length (cm)
+      <input type="number" step="0.1" id="back_mal_arc" value="12.6" required>
+    </label>
+    <label>Heel length (cm)
+      <input type="number" step="0.1" id="heel_len" value="20" required>
+    </label>
+    <label>Front malleolus arc length (cm)
+      <input type="number" step="0.1" id="front_mal_arc" value="15" required>
+    </label>
+    <label>Ankle front arc length (cm)
+      <input type="number" step="0.1" id="ankle_front_arc" value="18.5" required>
+    </label>
+    <label>Ankle front to metatarsal head length (cm)
+      <input type="number" step="0.1" id="ankle2meta" value="8.5" required>
+    </label>
+    <label>Metatarsal head to 2nd toe length (cm)
+      <input type="number" step="0.1" id="meta2toe" value="7" required>
+    </label>
+    <label>Metatarsal head arc length (cm)
+      <input type="number" step="0.1" id="meta_head_arc" value="15" required>
+    </label>
+    <button type="button" onclick="drawPattern()">Draw Pattern</button>
+    <div class="note">
+      Change level heights above to see how the pattern adjusts. All points and lines are drawn as in the original diagram.
+    </div>
+  </form>
+  <button id="printBtn" onclick="window.print()">Print (preview size)</button>
+  <button id="pdfBtn" type="button" onclick="downloadPDF()">Download PDF (A3, true size, pattern only)</button>
+  <div style="color:#b22; margin-bottom:1em; font-size:1.07em;">
+    <b>Print Tip:</b> For 1:1 accuracy, in your PDF viewer's print dialog, select <b>“Actual Size”</b> or <b>“100%”</b> scale and pick <b>A3 paper</b>.
+  </div>
+  <canvas id="sockPattern" width="560" height="1400"></canvas>
+  <script>
+    // Helper functions unchanged
+    function getCircleIntersections(c1, r1, c2, r2) {
+      let dx = c2.x - c1.x, dy = c2.y - c1.y;
+      let d = Math.hypot(dx, dy);
+      if (d > r1 + r2 || d < Math.abs(r1 - r2) || d === 0) return [];
+      let a = (r1*r1 - r2*r2 + d*d) / (2*d);
+      let h = Math.sqrt(r1*r1 - a*a);
+      let xm = c1.x + a*dx/d, ym = c1.y + a*dy/d;
+      let rx = -dy * (h/d), ry = dx * (h/d);
+      return [
+        {x: xm + rx, y: ym + ry},
+        {x: xm - rx, y: ym - ry}
+      ];
+    }
+    function rotatePoint(cx, cy, px, py, angleRad) {
+      let dx = px - cx, dy = py - cy;
+      let cos = Math.cos(angleRad), sin = Math.sin(angleRad);
+      return {
+        x: cx + dx * cos - dy * sin,
+        y: cy + dx * sin + dy * cos
+      };
+    }
+    function drawParabolaByThreePoints(ctx, Y, X, Z, color="#d35400", width=2.5) {
+      let x1=Y.x, y1=Y.y, x2=X.x, y2=X.y, x3=Z.x, y3=Z.y;
+      let denom = (x1-x2)*(x1-x3)*(x2-x3);
+      if (Math.abs(denom)<1e-8) return;
+      let a = (y1*(x2-x3) + y2*(x3-x1) + y3*(x1-x2)) / denom;
+      let b = (y1*(x3*x3-x2*x2) + y2*(x1*x1-x3*x3) + y3*(x2*x2-x1*x1)) / denom;
+      let c = (y1*(x2*x3*(x2-x3)) + y2*(x3*x1*(x3-x1)) + y3*(x1*x2*(x1-x2))) / denom;
+      let minX = Math.min(x1, x3), maxX = Math.max(x1, x3);
+      ctx.save();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = width;
+      ctx.beginPath();
+      let steps = 100;
+      for(let i=0;i<=steps;++i){
+        let xx = minX + (maxX-minX)*i/steps;
+        let yy = a*xx*xx + b*xx + c;
+        if (i==0) ctx.moveTo(xx,yy);
+        else ctx.lineTo(xx,yy);
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
+    // The ruler function accepts a flag for PDF export!
+    function drawRuler(ctx, x, y, length_cm, scale, forPDF=false) {
+      if(forPDF) return; // skip for PDF!
+      ctx.save();
+      ctx.strokeStyle = "#000";
+      ctx.lineWidth = 1.3;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + length_cm*scale, y);
+      ctx.stroke();
+      for (let i=0; i<=length_cm; ++i) {
+        ctx.beginPath();
+        ctx.moveTo(x + i*scale, y);
+        ctx.lineTo(x + i*scale, y-18);
+        ctx.stroke();
+        ctx.font = "bold 13px Arial";
+        ctx.fillStyle = "#000";
+        ctx.fillText(i, x + i*scale - 3, y+22);
+      }
+      for (let i=0; i<=length_cm*2; ++i) {
+        if (i%2==0) continue;
+        ctx.beginPath();
+        ctx.moveTo(x + i*scale/2, y);
+        ctx.lineTo(x + i*scale/2, y-10);
+        ctx.stroke();
+      }
+      ctx.font = "14px Arial";
+      ctx.fillStyle = "#000";
+      ctx.fillText("Calibration ruler: This should be exactly " + length_cm + " cm", x + length_cm*scale/2-85, y-26);
+      ctx.restore();
+    }
+    // Accepts a context and a flag forPDF
+    function drawPattern(ctxOverride, drawRulerInPDF=false) {
+      // Use override context if provided (for PDF offscreen), else use normal canvas
+      let canvas, ctx;
+      if(ctxOverride) {
+        ctx = ctxOverride;
+        canvas = ctx.canvas;
+      } else {
+        canvas = document.getElementById('sockPattern');
+        ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+      }
+
+      let leglen = parseFloat(document.getElementById('leglen').value);
+      let bk_circ = parseFloat(document.getElementById('bk_circ').value);
+      let calf_level = parseFloat(document.getElementById('calf_level').value);
+      let calf_circ = parseFloat(document.getElementById('calf_circ').value);
+      let narrowest_level = parseFloat(document.getElementById('narrowest_level').value);
+      let narrowest_circ = parseFloat(document.getElementById('narrowest_circ').value);
+      let back_mal_level = parseFloat(document.getElementById('back_mal_level').value);
+      let back_mal_arc = parseFloat(document.getElementById('back_mal_arc').value);
+      let heel_len = parseFloat(document.getElementById('heel_len').value);
+      let front_mal_arc = parseFloat(document.getElementById('front_mal_arc').value);
+      let ankle_front_arc = parseFloat(document.getElementById('ankle_front_arc').value);
+      let ankle2meta = parseFloat(document.getElementById('ankle2meta').value);
+      let meta2toe = parseFloat(document.getElementById('meta2toe').value);
+      let meta_head_arc = parseFloat(document.getElementById('meta_head_arc').value);
+      const scale = 10; // 1cm = 10px
+
+      let halfLen_bk = Math.round((bk_circ / 4.6) * 10) / 10;
+      let halfLen_calf = Math.round((calf_circ / 4.6) * 10) / 10;
+      let halfLen_narrow = Math.round((narrowest_circ / 4.6) * 10) / 10;
+      let halfLen_backmal = Math.round((back_mal_arc / 2.3) * 10) / 10;
+
+      // Only show ruler if not for PDF export
+      drawRuler(ctx, 50, 40, 10, scale, drawRulerInPDF);
+
+      let startX = canvas.width/2;
+      let startY = 100;
+
+      let y0 = startY;
+      let y_calf = startY + calf_level * scale;
+      let y_narrow = startY + narrowest_level * scale;
+      let y_backmal = startY + back_mal_level * scale;
+
+      let A = { x: startX - halfLen_bk * scale, y: y0 };
+      let B = { x: startX + halfLen_bk * scale, y: y0 };
+      let C = { x: startX - halfLen_calf * scale, y: y_calf };
+      let D = { x: startX + halfLen_calf * scale, y: y_calf };
+      let E = { x: startX - halfLen_narrow * scale, y: y_narrow };
+      let F = { x: startX + halfLen_narrow * scale, y: y_narrow };
+      let G = { x: startX - halfLen_backmal * scale, y: y_backmal };
+      let H = { x: startX + halfLen_backmal * scale, y: y_backmal };
+
+      ctx.save();
+      ctx.strokeStyle = "#444";
+      ctx.setLineDash([6, 5]);
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(startX, startY - 20);
+      ctx.lineTo(startX, startY + 1300);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+
+      function drawLevelLine(p1, p2, labelL, labelR, yText, cmVal, cmColor, showLen = true) {
+        ctx.strokeStyle = cmColor;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(p1.x, p1.y);
+        ctx.lineTo(p2.x, p2.y);
+        ctx.stroke();
+        ctx.font = "bold 15px Arial";
+        ctx.fillStyle = "#222";
+        ctx.fillText(labelL, p1.x - 18, p1.y + 6);
+        ctx.fillText(labelR, p2.x + 8, p2.y + 6);
+        if (showLen) {
+          ctx.font = "12px Arial";
+          ctx.fillStyle = cmColor;
+          ctx.fillText(cmVal, startX - 22, yText - 16);
+        }
+      }
+      drawLevelLine(A, B, "A", "B", y0, (halfLen_bk * 2).toFixed(1) + " cm", "#2277cc");
+      ctx.font = "13px Arial"; ctx.fillStyle = "#003366";
+      ctx.fillText("0 cm", B.x + 20, y0 - 8);
+
+      drawLevelLine(C, D, "C", "D", y_calf, (halfLen_calf * 2).toFixed(1) + " cm", "#7c3bff");
+      ctx.font = "13px Arial"; ctx.fillStyle = "#003366";
+      ctx.fillText(calf_level + " cm", D.x + 20, y_calf - 8);
+
+      drawLevelLine(E, F, "E", "F", y_narrow, (halfLen_narrow * 2).toFixed(1) + " cm", "#19b37b");
+      ctx.font = "13px Arial"; ctx.fillStyle = "#003366";
+      ctx.fillText(narrowest_level + " cm", F.x + 20, y_narrow - 8);
+
+      drawLevelLine(G, H, "G", "H", y_backmal, (halfLen_backmal * 2).toFixed(1) + " cm", "#ff7c7c");
+      ctx.font = "13px Arial"; ctx.fillStyle = "#003366";
+      ctx.fillText(back_mal_level + " cm", H.x + 20, y_backmal - 8);
+
+      ctx.strokeStyle = "#1a1a1a"; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(A.x, A.y); ctx.lineTo(C.x, C.y); ctx.lineTo(E.x, E.y); ctx.lineTo(G.x, G.y); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(B.x, B.y); ctx.lineTo(D.x, D.y); ctx.lineTo(F.x, F.y); ctx.lineTo(H.x, H.y); ctx.stroke();
+
+      let GH = Math.abs(H.x - G.x) / scale;
+      let heelHalf = heel_len / 2;
+      let GHhalf = GH / 2;
+      let segLen = Math.round((heelHalf - GHhalf) * 10) / 10;
+      if(segLen < 0) segLen = 0;
+      let I = {x: G.x - segLen*scale, y: G.y};
+      let J = {x: H.x + segLen*scale, y: H.y};
+
+      ctx.strokeStyle = "#f90"; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(G.x, G.y); ctx.lineTo(I.x, I.y); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(H.x, H.y); ctx.lineTo(J.x, J.y); ctx.stroke();
+
+      ctx.font = "bold 15px Arial"; ctx.fillStyle = "#222";
+      ctx.fillText("I", I.x - 18, I.y + 6); ctx.fillText("J", J.x + 8, J.y + 6);
+
+      ctx.font = "12px Arial"; ctx.fillStyle = "#f90";
+      ctx.fillText("IG = HJ = "+segLen.toFixed(1)+" cm", startX-80, G.y-32);
+
+      let IG = Math.abs(I.x - G.x) / scale;
+      let y = Math.round(((front_mal_arc / 2.3) - IG)*10)/10;
+      if(y < 0) y = 0;
+      ctx.font = "13px Arial"; ctx.fillStyle = "#CC33CC";
+      ctx.fillText("y = "+y.toFixed(1)+" cm", J.x + 60, J.y + 6);
+
+      let ankle_result = Math.round(((ankle_front_arc / 2.3) - y)*10)/10;
+      if(ankle_result < 0) ankle_result = 0;
+
+      let K = {x: I.x, y: I.y + ankle_result*scale};
+      let L = {x: startX, y: I.y + ankle_result*scale};
+      let M = {x: J.x, y: J.y + ankle_result*scale};
+
+      ctx.strokeStyle = "#CC33CC"; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(I.x, I.y); ctx.lineTo(K.x, K.y); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(startX, I.y); ctx.lineTo(L.x, L.y); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(J.x, J.y); ctx.lineTo(M.x, M.y); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(K.x, K.y); ctx.lineTo(L.x, L.y); ctx.lineTo(M.x, M.y); ctx.stroke();
+
+      ctx.font = "bold 15px Arial"; ctx.fillStyle = "#222";
+      ctx.fillText("K", K.x - 18, K.y + 6); ctx.fillText("L", L.x - 12, L.y + 18); ctx.fillText("M", M.x + 8, M.y + 6);
+
+      ctx.font = "12px Arial"; ctx.fillStyle = "#CC33CC";
+      ctx.fillText("KL = LM = "+ankle_result.toFixed(1)+" cm", L.x + 30, L.y - 8);
+
+      let EF = Math.abs(F.x - E.x) / scale;
+      let halfEF = EF / 2;
+      let N = {x: L.x - halfEF*scale, y: L.y};
+      let O = {x: L.x + halfEF*scale, y: L.y};
+      ctx.font = "bold 15px Arial"; ctx.fillStyle = "#222";
+      ctx.fillText("N", N.x - 16, N.y + 6); ctx.fillText("O", O.x + 8, O.y + 6);
+
+      let hLP = (back_mal_level - narrowest_level - 1);
+      let P = {x: L.x, y: L.y + hLP*scale};
+      ctx.strokeStyle = "#0099ff"; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(L.x, L.y); ctx.lineTo(P.x, P.y); ctx.stroke();
+      ctx.font = "bold 15px Arial"; ctx.fillStyle = "#222";
+      ctx.fillText("P", P.x - 12, P.y + 18);
+
+      let Q = {x: P.x - y*scale, y: P.y};
+      let R = {x: P.x + y*scale, y: P.y};
+      ctx.strokeStyle = "#b36b00"; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(Q.x, Q.y); ctx.lineTo(R.x, R.y); ctx.stroke();
+      ctx.font = "bold 15px Arial"; ctx.fillStyle = "#222";
+      ctx.fillText("Q", Q.x - 16, Q.y + 6); ctx.fillText("R", R.x + 8, R.y + 6);
+
+      let EG = Math.hypot(G.x - E.x, G.y - E.y) / scale;
+      let intersNQ = getCircleIntersections(N, EG*scale, Q, IG*scale);
+      let S = null;
+      if(intersNQ.length === 2) {
+        S = intersNQ[0].x < intersNQ[1].x ? intersNQ[0] : intersNQ[1];
+        ctx.beginPath();
+        ctx.arc(S.x, S.y, 4, 0, 2*Math.PI);
+        ctx.fillStyle = "#e60000";
+        ctx.fill();
+        ctx.font = "bold 15px Arial";
+        ctx.fillText("S", S.x - 18, S.y + 6);
+        ctx.strokeStyle = "#e60000";
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.moveTo(N.x, N.y);
+        ctx.lineTo(S.x, S.y);
+        ctx.stroke();
+      }
+
+      let intersOR = getCircleIntersections(O, EG*scale, R, IG*scale);
+      let T = null;
+      if(intersOR.length === 2) {
+        T = intersOR[0].x > intersOR[1].x ? intersOR[0] : intersOR[1];
+        ctx.beginPath();
+        ctx.arc(T.x, T.y, 4, 0, 2*Math.PI);
+        ctx.fillStyle = "#e60000";
+        ctx.fill();
+        ctx.font = "bold 15px Arial";
+        ctx.fillText("T", T.x + 10, T.y + 6);
+        ctx.strokeStyle = "#e60000";
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.moveTo(O.x, O.y);
+        ctx.lineTo(T.x, T.y);
+        ctx.stroke();
+      }
+
+      let IK_height = Math.abs(K.y - I.y);
+      function pointAlongLine(p0, p1, d) {
+        let dx = p1.x - p0.x, dy = p1.y - p0.y;
+        let len = Math.hypot(dx, dy);
+        return {
+          x: p0.x + (dx/len)*d,
+          y: p0.y + (dy/len)*d
+        };
+      }
+      let U = null, V = null;
+      if (S) {
+        U = pointAlongLine(Q, S, IK_height);
+        ctx.strokeStyle = "#7c4dff";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(Q.x, Q.y);
+        ctx.lineTo(U.x, U.y);
+        ctx.stroke();
+        ctx.font = "bold 15px Arial";
+        ctx.fillStyle = "#7c4dff";
+        ctx.fillText("U", U.x - 16, U.y + 6);
+        ctx.font = "12px Arial";
+        ctx.fillText("IK height = "+(IK_height/scale).toFixed(1)+" cm", (Q.x + U.x)/2 - 30, (Q.y + U.y)/2 - 10);
+      }
+      if (T) {
+        V = pointAlongLine(R, T, IK_height);
+        ctx.strokeStyle = "#7c4dff";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(R.x, R.y);
+        ctx.lineTo(V.x, V.y);
+        ctx.stroke();
+        ctx.font = "bold 15px Arial";
+        ctx.fillStyle = "#7c4dff";
+        ctx.fillText("V", V.x + 8, V.y + 6);
+      }
+
+      let W = {x: P.x, y: P.y + ankle2meta*scale};
+      ctx.strokeStyle = "#e67e22";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(P.x, P.y);
+      ctx.lineTo(W.x, W.y);
+      ctx.stroke();
+      ctx.font = "bold 15px Arial";
+      ctx.fillStyle = "#e67e22";
+      ctx.fillText("W", W.x - 10, W.y + 20);
+      ctx.font = "12px Arial";
+      ctx.fillText(ankle2meta.toFixed(1)+" cm", (P.x+W.x)/2 + 10, (P.y+W.y)/2 + 2);
+
+      let X = {x: W.x, y: W.y + meta2toe*scale};
+      ctx.strokeStyle = "#16a085";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(W.x, W.y);
+      ctx.lineTo(X.x, X.y);
+      ctx.stroke();
+      ctx.font = "bold 15px Arial";
+      ctx.fillStyle = "#16a085";
+      ctx.fillText("X", X.x - 10, X.y + 20);
+      ctx.font = "12px Arial";
+      ctx.fillText(meta2toe.toFixed(1)+" cm", (W.x+X.x)/2 + 10, (W.y+X.y)/2 + 2);
+
+      let meta_arc_len = Math.round((meta_head_arc / 1.15)*10)/10;
+      let arc_half = meta_arc_len/2 * scale;
+      let angle_deg = 10;
+      let angle_rad = angle_deg * Math.PI / 180;
+
+      let Y0 = {x: W.x - arc_half, y: W.y};
+      let Z0 = {x: W.x + arc_half, y: W.y};
+      let Y = rotatePoint(W.x, W.y, Y0.x, Y0.y, angle_rad);
+      let Z = rotatePoint(W.x, W.y, Z0.x, Z0.y, angle_rad);
+
+      ctx.strokeStyle = "#2d85f0";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(Y.x, Y.y);
+      ctx.lineTo(Z.x, Z.y);
+      ctx.stroke();
+      ctx.font = "bold 15px Arial";
+      ctx.fillStyle = "#2d85f0";
+      ctx.fillText("Y", Y.x - 18, Y.y - 5);
+      ctx.fillText("Z", Z.x + 10, Z.y - 5);
+      ctx.font = "12px Arial";
+      ctx.fillText(meta_arc_len.toFixed(1)+" cm", W.x - 30, (Y.y + Z.y)/2 - 18);
+
+      if (U && Y) {
+        ctx.strokeStyle = "#d35400";
+        ctx.lineWidth = 2.2;
+        ctx.beginPath();
+        ctx.moveTo(U.x, U.y);
+        ctx.lineTo(Y.x, Y.y);
+        ctx.stroke();
+      }
+      if (V && Z) {
+        ctx.strokeStyle = "#d35400";
+        ctx.lineWidth = 2.2;
+        ctx.beginPath();
+        ctx.moveTo(V.x, V.y);
+        ctx.lineTo(Z.x, Z.y);
+        ctx.stroke();
+      }
+
+      if (Y && Z && X) {
+        drawParabolaByThreePoints(ctx, Y, X, Z, "#d35400", 2.5);
+      }
+    }
+
+    // Draw preview on load and on input
+    window.onload = function() { drawPattern(); }
+    document.getElementById('sockForm').addEventListener('input', function() { drawPattern(); });
+
+    // PDF Export at true size, NO ruler in PDF
+    function downloadPDF() {
+      const { jsPDF } = window.jspdf;
+      // Use same size for offscreen canvas as preview canvas
+      const previewCanvas = document.getElementById("sockPattern");
+      const pxPerCm = 10; // 1cm = 10px
+      const widthCm = previewCanvas.width / pxPerCm;
+      const heightCm = previewCanvas.height / pxPerCm;
+      const widthMM = widthCm * 10;
+      const heightMM = heightCm * 10;
+
+      // A3 size
+      const pageWidth = 297, pageHeight = 420;
+      const marginTop = 12;
+      const marginBottom = 12;
+
+      const maxImgHeightPerPage = pageHeight - marginTop - marginBottom;
+      const pages = Math.ceil(heightMM / maxImgHeightPerPage);
+
+      // Make an offscreen canvas for PDF, no ruler
+      function getPatternPageImage(pageIdx, sliceHeightPx) {
+        let pageCanvas = document.createElement('canvas');
+        pageCanvas.width = previewCanvas.width;
+        pageCanvas.height = sliceHeightPx;
+        let pageCtx = pageCanvas.getContext('2d');
+        // Draw the pattern without ruler, using pageCtx
+        let syPx = Math.round((pageIdx * maxImgHeightPerPage) * pxPerCm / 10);
+        // Move the drawing origin so only the correct slice is drawn
+        pageCtx.save();
+        pageCtx.translate(0, -syPx);
+        drawPattern(pageCtx, true); // true = forPDF, so ruler is not drawn
+        pageCtx.restore();
+        return pageCanvas.toDataURL("image/png", 1.0);
+      }
+
+      const pdf = new jsPDF({ orientation: widthMM > heightMM ? "landscape" : "portrait", unit: "mm", format: "a3" });
+      for (let p=0; p<pages; ++p) {
+        if (p>0) pdf.addPage();
+        let sliceHeightMM = Math.min(heightMM - p * maxImgHeightPerPage, maxImgHeightPerPage);
+        let sliceHeightPx = Math.round(sliceHeightMM * pxPerCm / 10);
+        let pageDataUrl = getPatternPageImage(p, sliceHeightPx);
+
+        let x = (pageWidth - widthMM) / 2;
+        let y = marginTop;
+
+        pdf.addImage(
+          pageDataUrl,
+          "PNG",
+          x,
+          y,
+          widthMM,
+          sliceHeightMM
+        );
+
+        pdf.setFontSize(10);
+        pdf.text(`Page ${p+1} of ${pages}`, pageWidth - 40, pageHeight - 8);
+      }
+      pdf.save("sock-pattern-true-size-a3.pdf");
+    }
+  </script>
+</body>
+</html>
